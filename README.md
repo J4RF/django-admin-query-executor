@@ -6,6 +6,8 @@ A powerful Django admin extension that allows you to execute Django ORM queries 
 ![Python Support](https://img.shields.io/badge/python-%3E%3D3.8-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 
+<img width="1350" height="600" alt="Screenshot 2025-07-17 at 2 42 18 PM" src="https://github.com/user-attachments/assets/03e109d3-92db-4c9b-8df8-b0c1fedc0b32" />
+
 ## Features
 
 - **Direct Query Execution**: Execute Django ORM queries directly from the admin changelist view
