@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="django-admin-query-executor",
-    version="1.0.0",
+    version="1.1.0",
     author="Jeff Turner",
     author_email="jeff@torusoft.com",
     description="Execute Django ORM queries directly from the admin interface",
