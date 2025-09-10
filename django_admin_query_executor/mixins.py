@@ -7,6 +7,11 @@ from django.apps import apps
 from django.http import HttpResponseRedirect, JsonResponse
 from django.urls import path
 from django.core.cache import cache
+from django.conf import settings
+import importlib
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class QueryExecutorForm(forms.Form):
@@ -49,6 +54,14 @@ class QueryExecutorMixin:
 
     # Override to set custom history limit (default 5)
     query_history_limit = 5
+
+    # Override this in your ModelAdmin to add custom imports
+    # Format: {alias: module_path} or {alias: (module_path, attribute)}
+    # Examples:
+    # {'json': 'json'}                              # import json
+    # {'PossibleMatch': 'numi.models.PossibleMatch'}  # from numi.models import PossibleMatch
+    # {'settings': ('django.conf', 'settings')}      # from django.conf import settings
+    custom_imports = {}
 
     class Media:
         css = {
@@ -171,6 +184,42 @@ class QueryExecutorMixin:
 
         return JsonResponse({'success': False, 'error': 'Invalid request method'})
 
+    def _load_custom_imports(self):
+        """
+        Load custom imports from both Django settings and class attribute.
+        Returns a dictionary of {alias: imported_object}
+        """
+        custom_imports_dict = {}
+
+        # Get imports from Django settings
+        settings_imports = getattr(settings, 'QUERY_EXECUTOR_CUSTOM_IMPORTS', {})
+
+        # Merge with class-level custom imports
+        all_imports = {**settings_imports, **self.custom_imports}
+
+        for alias, import_spec in all_imports.items():
+            try:
+                if isinstance(import_spec, str):
+                    # Simple module import: {'json': 'json'} -> import json
+                    module = importlib.import_module(import_spec)
+                    custom_imports_dict[alias] = module
+                elif isinstance(import_spec, (tuple, list)) and len(import_spec) == 2:
+                    # From import: {'settings': ('django.conf', 'settings')} -> from django.conf import settings
+                    module_path, attr_name = import_spec
+                    module = importlib.import_module(module_path)
+                    if hasattr(module, attr_name):
+                        custom_imports_dict[alias] = getattr(module, attr_name)
+                    else:
+                        logger.warning(f"Attribute '{attr_name}' not found in module '{module_path}'")
+                else:
+                    logger.warning(f"Invalid import specification for '{alias}': {import_spec}")
+            except ImportError as e:
+                logger.warning(f"Failed to import '{alias}' ({import_spec}): {e}")
+            except Exception as e:
+                logger.error(f"Error loading custom import '{alias}': {e}")
+
+        return custom_imports_dict
+
     def _execute_django_query(self, query_string):
         """
         Safely execute a Django ORM query string.
@@ -282,6 +331,10 @@ class QueryExecutorMixin:
             'len': len,
             'range': range,
         }
+
+        # Add custom imports
+        custom_imports = self._load_custom_imports()
+        allowed_names.update(custom_imports)
 
         # Replace Model.objects with actual model reference
         import re
