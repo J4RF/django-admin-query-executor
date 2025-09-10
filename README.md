@@ -13,6 +13,7 @@ A powerful Django admin extension that allows you to execute Django ORM queries 
 - **Direct Query Execution**: Execute Django ORM queries directly from the admin changelist view
 - **Seamless Integration**: Query results replace the standard admin list view
 - **Full Django ORM Support**: Use `Q()`, `F()`, `Count()`, `Sum()`, `Avg()`, and other Django model functions
+- **Custom Imports**: Add your own modules, functions, and classes to the query execution environment
 - **Query History**: Automatically saves your recent queries for quick re-execution
 - **Favorite Queries**: Save frequently used queries with custom names
 - **Collapsible Interface**: Clean, collapsible UI that doesn't clutter your admin
@@ -88,9 +89,90 @@ Book.objects.select_related('author', 'publisher').filter(price__lt=50)
 # Counting and existence checks
 Book.objects.filter(category='Fiction').count()
 Book.objects.filter(reviews__rating__gte=4).exists()
+
+# Using custom imports (see Custom Imports section)
+Book.objects.filter(title__in=json.loads('[\"Book1\", \"Book2\"]'))
+Book.objects.filter(created_date__gte=datetime.now() - timedelta(days=30))
 ```
 
 ## Configuration
+
+### Custom Imports
+
+You can add custom modules, functions, and classes to the query execution environment in two ways:
+
+#### Method 1: Django Settings (Global)
+
+Add a `QUERY_EXECUTOR_CUSTOM_IMPORTS` setting to your Django settings file:
+
+```python
+# settings.py
+QUERY_EXECUTOR_CUSTOM_IMPORTS = {
+    # Import entire modules
+    'json': 'json',
+    'datetime': 'datetime',
+    'timedelta': 'datetime.timedelta',
+    'timezone': 'django.utils.timezone',
+
+    # Import specific functions/classes from modules
+    'settings': ('django.conf', 'settings'),
+    'Decimal': ('decimal', 'Decimal'),
+
+    # Import your custom models and functions
+    'Listing': 'numi.models.Listing',
+    'Coin': 'numi.models.Coin',
+    'custom_function': 'myapp.utils.custom_function',
+}
+```
+
+#### Method 2: ModelAdmin Class Attribute (Per-Admin)
+
+Override the `custom_imports` attribute in your ModelAdmin:
+
+```python
+@admin.register(PossibleMatch)
+class PossibleMatchAdmin(QueryExecutorMixin, admin.ModelAdmin):
+    # Custom imports specific to this admin
+    custom_imports = {
+        'json': 'json',
+        'settings': ('django.conf', 'settings'),
+        'Listing': 'numi.models.Listing',
+        'Coin': 'numi.models.Coin',
+        'timedelta': ('datetime', 'timedelta'),
+        'now': ('django.utils.timezone', 'now'),
+    }
+
+    query_examples = [
+        ("High confidence matches", "PossibleMatch.objects.filter(textual_score__gt=0.8, image_score__gt=0.8)"),
+        ("Recent matches", "PossibleMatch.objects.filter(textual_match_date__gte=now() - timedelta(days=7))"),
+        ("Using settings", "PossibleMatch.objects.filter(textual_score__gte=settings.TEXTUAL_SCORE_CUTOFF)"),
+        ("With JSON data", "PossibleMatch.objects.filter(id__in=json.loads('[1, 2, 3]'))"),
+    ]
+```
+
+#### Import Format Examples
+
+```python
+custom_imports = {
+    # Simple module imports
+    'json': 'json',                    # import json
+    'os': 'os',                        # import os
+
+    # Import specific items from modules
+    'settings': ('django.conf', 'settings'),              # from django.conf import settings
+    'timezone': ('django.utils', 'timezone'),             # from django.utils import timezone
+    'timedelta': ('datetime', 'timedelta'),               # from datetime import timedelta
+    'Decimal': ('decimal', 'Decimal'),                    # from decimal import Decimal
+
+    # Import your custom models
+    'User': ('django.contrib.auth.models', 'User'),      # from django.contrib.auth.models import User
+    'MyModel': ('myapp.models', 'MyModel'),               # from myapp.models import MyModel
+
+    # Import custom functions/utilities
+    'my_function': ('myapp.utils', 'my_function'),        # from myapp.utils import my_function
+    'calculate_score': ('myapp.scoring', 'calculate_score'),
+}
+```
 
 ### Custom Change List Templates
 
@@ -110,6 +192,7 @@ class BookAdmin(QueryExecutorMixin, admin.ModelAdmin):
         ("Bestsellers", "Book.objects.filter(is_bestseller=True)"),
         ("By price range", "Book.objects.filter(price__gte=20, price__lte=50)"),
         ("Review stats", "Book.objects.annotate(avg_rating=Avg('reviews__rating')).filter(avg_rating__gte=4.0)"),
+        ("Using custom imports", "Book.objects.filter(created_date__gte=now() - timedelta(days=30))"),
     ]
 ```
 
@@ -179,6 +262,8 @@ The query executor runs in a restricted environment with:
 - No access to private attributes or methods
 - No direct database access beyond Django ORM
 - No file system or network access
+- Custom imports are loaded with error handling
+- Failed imports are logged but don't break functionality
 
 ## Requirements
 
@@ -194,6 +279,9 @@ MIT License - see LICENSE file for details
 Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Changelog
+
+### 1.1.0 (2025-01-17)
+- Added custom imports support via Django settings and ModelAdmin attribute
 
 ### 1.0.0 (2025-07-17)
 - Initial release
