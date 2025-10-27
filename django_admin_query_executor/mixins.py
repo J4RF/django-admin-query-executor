@@ -14,6 +14,231 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def execute_django_query(query_string, model, custom_imports=None):
+    """
+    Safely execute a Django ORM query string.
+
+    This is a standalone function that can be used outside of the admin interface
+    to execute Django ORM queries from text strings.
+
+    Args:
+        query_string (str): The Django ORM query string to execute
+            e.g., "Model.objects.filter(field=value)"
+        model (Model): The Django model class to use as the base model
+        custom_imports (dict, optional): Additional imports to make available in the query
+            Format: {alias: module_path} or {alias: (module_path, attribute)}
+            Examples:
+                {'json': 'json'}  # import json
+                {'MyModel': ('myapp.models', 'MyModel')}  # from myapp.models import MyModel
+
+    Returns:
+        QuerySet or other result: The result of executing the query
+
+    Raises:
+        ValueError: If there's a syntax error or execution error in the query
+
+    Example:
+        from django_admin_query_executor.mixins import execute_django_query
+        from myapp.models import MyModel
+
+        result = execute_django_query(
+            "objects.filter(status='active').count()",
+            MyModel
+        )
+    """
+    # Import additional Django ORM features
+    from django.db.models import (
+        Exists, OuterRef, Subquery, ExpressionWrapper,
+        IntegerField, FloatField, CharField, DateField, DateTimeField,
+        BooleanField, DecimalField, DurationField, EmailField, TextField,
+        StdDev, Variance
+    )
+    from django.db.models.functions import (
+        Cast, Extract, Now, TruncDate, TruncMonth, TruncYear,
+        Trim, LTrim, RTrim, Replace, StrIndex
+    )
+
+    # Define allowed names for eval
+    allowed_names = {
+        # Models
+        model.__name__: model,
+        'objects': model.objects,
+
+        # Query methods
+        'filter': 'filter',
+        'exclude': 'exclude',
+        'all': 'all',
+        'get': 'get',
+        'first': 'first',
+        'last': 'last',
+        'count': 'count',
+        'exists': 'exists',
+        'values': 'values',
+        'values_list': 'values_list',
+        'order_by': 'order_by',
+        'distinct': 'distinct',
+        'select_related': 'select_related',
+        'prefetch_related': 'prefetch_related',
+        'annotate': 'annotate',
+        'aggregate': 'aggregate',
+        'only': 'only',
+        'defer': 'defer',
+        'using': 'using',
+        'raw': 'raw',
+        'union': 'union',
+        'intersection': 'intersection',
+        'difference': 'difference',
+
+        # Lookups and expressions
+        'Q': Q,
+        'F': F,
+        'Count': Count,
+        'Sum': Sum,
+        'Avg': Avg,
+        'Max': Max,
+        'Min': Min,
+        'StdDev': StdDev,
+        'Variance': Variance,
+        'Value': Value,
+        'Case': Case,
+        'When': When,
+        'Exists': Exists,
+        'OuterRef': OuterRef,
+        'Subquery': Subquery,
+        'ExpressionWrapper': ExpressionWrapper,
+
+        # Field types for casting
+        'IntegerField': IntegerField,
+        'FloatField': FloatField,
+        'CharField': CharField,
+        'DateField': DateField,
+        'DateTimeField': DateTimeField,
+        'BooleanField': BooleanField,
+        'DecimalField': DecimalField,
+        'DurationField': DurationField,
+        'EmailField': EmailField,
+        'TextField': TextField,
+
+        # Functions
+        'Coalesce': Coalesce,
+        'Concat': Concat,
+        'Length': Length,
+        'Lower': Lower,
+        'Upper': Upper,
+        'Substr': Substr,
+        'Cast': Cast,
+        'Extract': Extract,
+        'Now': Now,
+        'TruncDate': TruncDate,
+        'TruncMonth': TruncMonth,
+        'TruncYear': TruncYear,
+        'Trim': Trim,
+        'LTrim': LTrim,
+        'RTrim': RTrim,
+        'Replace': Replace,
+        'StrIndex': StrIndex,
+
+        # Python built-ins
+        'True': True,
+        'False': False,
+        'None': None,
+        'list': list,
+        'dict': dict,
+        'set': set,
+        'tuple': tuple,
+        'str': str,
+        'int': int,
+        'float': float,
+        'len': len,
+        'range': range,
+    }
+
+    # Add custom imports
+    if custom_imports:
+        custom_imports_dict = {}
+        for alias, import_spec in custom_imports.items():
+            try:
+                if isinstance(import_spec, str):
+                    # Simple module import: {'json': 'json'} -> import json
+                    module = importlib.import_module(import_spec)
+                    custom_imports_dict[alias] = module
+                elif isinstance(import_spec, (tuple, list)) and len(import_spec) == 2:
+                    # From import: {'settings': ('django.conf', 'settings')} -> from django.conf import settings
+                    module_path, attr_name = import_spec
+                    module = importlib.import_module(module_path)
+                    if hasattr(module, attr_name):
+                        custom_imports_dict[alias] = getattr(module, attr_name)
+                    else:
+                        logger.warning(f"Attribute '{attr_name}' not found in module '{module_path}'")
+                else:
+                    logger.warning(f"Invalid import specification for '{alias}': {import_spec}")
+            except ImportError as e:
+                logger.warning(f"Failed to import '{alias}' ({import_spec}): {e}")
+            except Exception as e:
+                logger.error(f"Error loading custom import '{alias}': {e}")
+
+        allowed_names.update(custom_imports_dict)
+
+    # Load custom imports from Django settings
+    settings_imports = getattr(settings, 'QUERY_EXECUTOR_CUSTOM_IMPORTS', {})
+    if settings_imports:
+        for alias, import_spec in settings_imports.items():
+            try:
+                if isinstance(import_spec, str):
+                    module = importlib.import_module(import_spec)
+                    allowed_names[alias] = module
+                elif isinstance(import_spec, (tuple, list)) and len(import_spec) == 2:
+                    module_path, attr_name = import_spec
+                    module = importlib.import_module(module_path)
+                    if hasattr(module, attr_name):
+                        allowed_names[alias] = getattr(module, attr_name)
+            except (ImportError, Exception) as e:
+                logger.warning(f"Failed to import '{alias}' from settings: {e}")
+
+    # Replace Model.objects with actual model reference
+    import re
+    query_string = re.sub(
+        r'\b(\w+)\.objects\b',
+        lambda m: f'objects' if m.group(1) == model.__name__ else m.group(0),
+        query_string
+    )
+
+    # Create a restricted environment
+    restricted_globals = {'__builtins__': {}}
+    restricted_globals.update(allowed_names)
+
+    # Add any referenced models from the query
+    # This regex finds patterns like "Model.objects" or "Model("
+    model_references = re.findall(r'\b([A-Z]\w+)(?:\.objects|\()', query_string)
+    for model_name in set(model_references):
+        if model_name != model.__name__:
+            try:
+                # Try to import the model from the same app first
+                try:
+                    related_model = apps.get_model(model._meta.app_label, model_name)
+                    restricted_globals[model_name] = related_model
+                except:
+                    # Try to find the model in any installed app
+                    for app_config in apps.get_app_configs():
+                        try:
+                            related_model = apps.get_model(app_config.label, model_name)
+                            restricted_globals[model_name] = related_model
+                            break
+                        except:
+                            continue
+            except:
+                pass  # Model not found, will error during eval
+
+    try:
+        # Execute the query
+        result = eval(query_string, restricted_globals)
+        return result
+    except SyntaxError as e:
+        raise ValueError(f"Syntax error in query: {str(e)}")
+    except Exception as e:
+        raise ValueError(f"Error executing query: {str(e)}")
+
+
 class QueryExecutorForm(forms.Form):
     query = forms.CharField(
         widget=forms.Textarea(attrs={
@@ -224,160 +449,14 @@ class QueryExecutorMixin:
         """
         Safely execute a Django ORM query string.
         Supports common Django ORM methods and functions.
+
+        This method is a wrapper around the standalone execute_django_query() function.
         """
-        # Import additional Django ORM features
-        from django.db.models import (
-            Exists, OuterRef, Subquery, ExpressionWrapper,
-            IntegerField, FloatField, CharField, DateField, DateTimeField,
-            BooleanField, DecimalField, DurationField, EmailField, TextField,
-            StdDev, Variance
-        )
-        from django.db.models.functions import (
-            Cast, Extract, Now, TruncDate, TruncMonth, TruncYear,
-            Trim, LTrim, RTrim, Replace, StrIndex
-        )
-
-        # Define allowed names for eval
-        allowed_names = {
-            # Models
-            self.model.__name__: self.model,
-            'objects': self.model.objects,
-
-            # Query methods
-            'filter': 'filter',
-            'exclude': 'exclude',
-            'all': 'all',
-            'get': 'get',
-            'first': 'first',
-            'last': 'last',
-            'count': 'count',
-            'exists': 'exists',
-            'values': 'values',
-            'values_list': 'values_list',
-            'order_by': 'order_by',
-            'distinct': 'distinct',
-            'select_related': 'select_related',
-            'prefetch_related': 'prefetch_related',
-            'annotate': 'annotate',
-            'aggregate': 'aggregate',
-            'only': 'only',
-            'defer': 'defer',
-            'using': 'using',
-            'raw': 'raw',
-            'union': 'union',
-            'intersection': 'intersection',
-            'difference': 'difference',
-
-            # Lookups and expressions
-            'Q': Q,
-            'F': F,
-            'Count': Count,
-            'Sum': Sum,
-            'Avg': Avg,
-            'Max': Max,
-            'Min': Min,
-            'StdDev': StdDev,
-            'Variance': Variance,
-            'Value': Value,
-            'Case': Case,
-            'When': When,
-            'Exists': Exists,
-            'OuterRef': OuterRef,
-            'Subquery': Subquery,
-            'ExpressionWrapper': ExpressionWrapper,
-
-            # Field types for casting
-            'IntegerField': IntegerField,
-            'FloatField': FloatField,
-            'CharField': CharField,
-            'DateField': DateField,
-            'DateTimeField': DateTimeField,
-            'BooleanField': BooleanField,
-            'DecimalField': DecimalField,
-            'DurationField': DurationField,
-            'EmailField': EmailField,
-            'TextField': TextField,
-
-            # Functions
-            'Coalesce': Coalesce,
-            'Concat': Concat,
-            'Length': Length,
-            'Lower': Lower,
-            'Upper': Upper,
-            'Substr': Substr,
-            'Cast': Cast,
-            'Extract': Extract,
-            'Now': Now,
-            'TruncDate': TruncDate,
-            'TruncMonth': TruncMonth,
-            'TruncYear': TruncYear,
-            'Trim': Trim,
-            'LTrim': LTrim,
-            'RTrim': RTrim,
-            'Replace': Replace,
-            'StrIndex': StrIndex,
-
-            # Python built-ins
-            'True': True,
-            'False': False,
-            'None': None,
-            'list': list,
-            'dict': dict,
-            'set': set,
-            'tuple': tuple,
-            'str': str,
-            'int': int,
-            'float': float,
-            'len': len,
-            'range': range,
-        }
-
-        # Add custom imports
+        # Get custom imports from the mixin
         custom_imports = self._load_custom_imports()
-        allowed_names.update(custom_imports)
 
-        # Replace Model.objects with actual model reference
-        import re
-        query_string = re.sub(
-            r'\b(\w+)\.objects\b',
-            lambda m: f'objects' if m.group(1) == self.model.__name__ else m.group(0),
-            query_string
-        )
-
-        # Create a restricted environment
-        restricted_globals = {'__builtins__': {}}
-        restricted_globals.update(allowed_names)
-
-        # Add any referenced models from the query
-        # This regex finds patterns like "Model.objects" or "Model("
-        model_references = re.findall(r'\b([A-Z]\w+)(?:\.objects|\()', query_string)
-        for model_name in set(model_references):
-            if model_name != self.model.__name__:
-                try:
-                    # Try to import the model from the same app first
-                    try:
-                        model = apps.get_model(self.model._meta.app_label, model_name)
-                        restricted_globals[model_name] = model
-                    except:
-                        # Try to find the model in any installed app
-                        for app_config in apps.get_app_configs():
-                            try:
-                                model = apps.get_model(app_config.label, model_name)
-                                restricted_globals[model_name] = model
-                                break
-                            except:
-                                continue
-                except:
-                    pass  # Model not found, will error during eval
-
-        try:
-            # Execute the query
-            result = eval(query_string, restricted_globals)
-            return result
-        except SyntaxError as e:
-            raise ValueError(f"Syntax error in query: {str(e)}")
-        except Exception as e:
-            raise ValueError(f"Error executing query: {str(e)}")
+        # Use the standalone function
+        return execute_django_query(query_string, self.model, custom_imports)
 
     def _get_cache_key_prefix(self, request):
         """Get cache key prefix for user-specific data"""

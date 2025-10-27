@@ -34,6 +34,8 @@ pip install django-admin-query-executor
 
 ## Quick Start
 
+### Using in Django Admin (QueryExecutorMixin)
+
 1. Add `django_admin_query_executor` to your `INSTALLED_APPS`:
 
 ```python
@@ -63,7 +65,57 @@ class MyModelAdmin(QueryExecutorMixin, admin.ModelAdmin):
     ]
 ```
 
-## Usage
+### Using as Standalone Function (execute_django_query)
+
+You can also use the query executor outside the admin interface in your views, management commands, APIs, Celery tasks, or scripts:
+
+```python
+from django_admin_query_executor import execute_django_query
+from myapp.models import Book
+
+# Execute a query from a string
+result = execute_django_query(
+    "objects.filter(price__gte=20).count()",
+    Book
+)
+print(f"Books priced $20 or more: {result}")
+
+# With custom imports
+custom_imports = {
+    'json': 'json',
+    'timedelta': ('datetime', 'timedelta'),
+}
+books = execute_django_query(
+    "objects.filter(created_date__gte=now() - timedelta(days=30))",
+    Book,
+    custom_imports=custom_imports
+)
+```
+
+**Function Signature:**
+```python
+execute_django_query(query_string, model, custom_imports=None)
+```
+
+**Parameters:**
+- `query_string` (str): The Django ORM query string to execute
+- `model` (Model): The Django model class to use as the base model
+- `custom_imports` (dict, optional): Additional imports to make available in the query
+
+**Returns:** QuerySet or other result (int, dict, etc.) depending on the query
+
+**Raises:** `ValueError` if there's a syntax error or execution error in the query
+
+**Use Cases:**
+- Django management commands for running scheduled queries
+- API endpoints that accept dynamic query strings
+- Celery tasks for background query execution
+- Admin actions with custom query logic
+- Testing and debugging scripts
+
+See `example_usage.py` for detailed examples including usage in management commands, views, APIs, and Celery tasks.
+
+## Usage (Admin Interface)
 
 1. Navigate to any model's admin changelist that uses `QueryExecutorMixin`
 2. Click "Execute Django Query" to expand the query interface
@@ -93,6 +145,41 @@ Book.objects.filter(reviews__rating__gte=4).exists()
 # Using custom imports (see Custom Imports section)
 Book.objects.filter(title__in=json.loads('[\"Book1\", \"Book2\"]'))
 Book.objects.filter(created_date__gte=datetime.now() - timedelta(days=30))
+```
+
+### Standalone Function Examples
+
+```python
+from django_admin_query_executor import execute_django_query
+from myapp.models import Book, Author
+
+# Basic filtering
+active_books = execute_django_query("objects.filter(is_active=True)", Book)
+
+# Count query
+count = execute_django_query("objects.filter(price__gte=20).count()", Book)
+
+# Annotations
+stats = execute_django_query(
+    "objects.aggregate(avg_price=Avg('price'), total=Count('id'))",
+    Book
+)
+
+# Complex queries with Q objects
+books = execute_django_query(
+    "objects.filter(Q(category='Fiction') | Q(category='Mystery'))",
+    Book
+)
+
+# With custom imports
+result = execute_django_query(
+    "objects.filter(published_date__gte=now() - timedelta(days=30))",
+    Book,
+    custom_imports={
+        'timedelta': ('datetime', 'timedelta'),
+        'now': ('django.utils.timezone', 'now'),
+    }
+)
 ```
 
 ## Configuration
@@ -278,7 +365,55 @@ MIT License - see LICENSE file for details
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+## API Reference
+
+### `execute_django_query(query_string, model, custom_imports=None)`
+
+Standalone function for executing Django ORM queries from text strings outside the admin interface.
+
+**Parameters:**
+- `query_string` (str): Django ORM query string (e.g., `"objects.filter(status='active').count()"`)
+- `model` (django.db.models.Model): The Django model class to query
+- `custom_imports` (dict, optional): Additional modules/functions to make available
+  - Format: `{alias: module_path}` or `{alias: (module_path, attribute)}`
+  - Example: `{'json': 'json', 'MyModel': ('myapp.models', 'MyModel')}`
+
+**Returns:**
+- QuerySet, int, dict, or other result depending on the query
+
+**Raises:**
+- `ValueError`: If there's a syntax error or execution error in the query
+
+**Security:**
+- Queries execute in a restricted environment with whitelisted functions only
+- No access to private attributes, file system, or network
+- Custom imports are loaded with error handling
+
+**Example:**
+```python
+from django_admin_query_executor import execute_django_query
+from myapp.models import Book
+
+# Simple usage
+books = execute_django_query("objects.filter(price__lt=30)", Book)
+
+# With custom imports
+result = execute_django_query(
+    "objects.filter(created__gte=now() - timedelta(days=7))",
+    Book,
+    custom_imports={
+        'timedelta': ('datetime', 'timedelta'),
+        'now': ('django.utils.timezone', 'now'),
+    }
+)
+```
+
 ## Changelog
+
+### 1.2.0 (TBD)
+- Added standalone `execute_django_query()` function for use outside admin interface
+- Function can be used in management commands, views, APIs, Celery tasks, and scripts
+- Refactored internal implementation to share code between mixin and standalone function
 
 ### 1.1.0 (2025-01-17)
 - Added custom imports support via Django settings and ModelAdmin attribute
